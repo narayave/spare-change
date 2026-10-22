@@ -25,6 +25,7 @@ export default function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   // Pick up the pass from #pass=... (fresh purchase) or from this device.
@@ -69,6 +70,19 @@ export default function Chat() {
     setCode(null); setStatus(null); setMessages([]);
   }
 
+  // Every reply resends the whole conversation, so a fresh chat for a new task makes the pass last longer.
+  function newChat() {
+    if (!confirm("Start a new chat? This conversation will be cleared from this device.")) return;
+    setMessages([]); setError(null);
+  }
+
+  function copy(i: number, text: string) {
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopied(i);
+      setTimeout(() => setCopied(null), 1500);
+    }, () => {});
+  }
+
   async function send(text: string) {
     if (!code || busy || !text.trim()) return;
     if (text.length > MAX_CHARS) return setError("That message is too long. Try pasting a shorter part.");
@@ -79,6 +93,7 @@ export default function Chat() {
     setInput("");
     setBusy(true);
 
+    let reply = "";
     try {
       const res = await fetch("/api/chat", { method: "POST", body: JSON.stringify({ code, messages: next }) });
       if (!res.ok || !res.body) {
@@ -88,7 +103,6 @@ export default function Chat() {
         return;
       }
       const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
-      let reply = "";
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -96,6 +110,11 @@ export default function Chat() {
         setMessages([...next, { role: "assistant", content: reply }]);
       }
     } catch {
+      // An empty reply would be saved and then rejected by the server on every later send, so drop it.
+      if (!reply) {
+        setMessages(next.slice(0, -1));
+        setInput(text);
+      }
       setError("Connection lost. Check your internet and try again.");
     } finally {
       setBusy(false);
@@ -137,6 +156,7 @@ export default function Chat() {
               : "Checking your pass…"}
           </span>
         </div>
+        <button className="btn ghost small" onClick={newChat} disabled={busy || messages.length === 0}>New chat</button>
         <button className="btn ghost small" onClick={forget}>Forget pass</button>
       </header>
 
@@ -156,7 +176,12 @@ export default function Chat() {
           </div>
         )}
         {messages.map((m, i) => (
-          <div key={i} className={`msg ${m.role}`}>{m.content || "…"}</div>
+          <div key={i} className={`msg ${m.role}`}>
+            {m.content || "…"}
+            {m.role === "assistant" && m.content && !(busy && i === messages.length - 1) && (
+              <button className="btn ghost small copy" onClick={() => copy(i, m.content)}>{copied === i ? "Copied" : "Copy"}</button>
+            )}
+          </div>
         ))}
         {error && <p role="alert" className="muted">{error}</p>}
         {empty && <p className="muted">This pass is finished. <Link href="/">Get another one</Link> to keep going.</p>}
